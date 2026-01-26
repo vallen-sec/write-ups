@@ -36,9 +36,8 @@ After the scanning. I started a directory enumeration with gobuster:
 gobuster dir -u http://10.64.179.44:12340 -w /usr/share/wordlists/dirb/big.txt --random-agent
 ```
 
-Some minutes after, the command returned the ```/rms``` directory.
-This directory hosted a Restaurant Management System web application.
-
+A few minutes after, the command returned the ```/rms``` directory.
+This directory hosted a Restaurant Management System.
 ## Vulnerability Analysis
 
 ### Stored Cross-Site Scripting
