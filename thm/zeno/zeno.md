@@ -27,6 +27,10 @@ PORT      STATE SERVICE VERSION
 |_  Potentially risky methods: TRACE
 ```
 
+This indicated a web application running on a non-standard port: 12340.
+
+### Web Enumeration
+
 After the scanning. I started a directory enumeration with gobuster:
 ```bash
 gobuster dir -u http://10.64.179.44:12340 -w /usr/share/wordlists/dirb/big.txt --random-agent
