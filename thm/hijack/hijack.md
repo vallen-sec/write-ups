@@ -1,4 +1,4 @@
-# Zeno - Writeup
+# Hijack - Writeup
 
 - **Machine Name:** Hijack
 - **Platform:** TryHackMe
@@ -92,6 +92,8 @@ Infortunately, we don't have permission to access the share folder since just th
 $ sudo useradd -m -u 1003 -s /bin/bash hijack
 $ sudo su hijack
 ```
+
+![RCP bypass](images/nmap_scan.png)
 
 ### Web Enumeration
 
